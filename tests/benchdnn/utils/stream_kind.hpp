@@ -44,7 +44,12 @@ std::ostream &operator<<(std::ostream &s, stream_kind_t stream_kind);
 
 struct stream_t {
     stream_t() = default;
-    stream_t(const engine_t &engine, void *interop_obj = nullptr);
+    // `enable_profiling=false` forces the stream to be created without the
+    // profiling flag even in performance mode. It's used by the shared
+    // data-preparation stream (see `get_test_stream`) which is never queried
+    // for profiling data.
+    stream_t(const engine_t &engine, void *interop_obj = nullptr,
+            bool enable_profiling = true);
     operator dnnl_stream_t() const {
         return stream_.get(/* allow_empty = */ true);
     }
@@ -70,5 +75,16 @@ struct stream_staller_t {
 private:
     std::promise<void> prom_;
 };
+
+// A process-wide stream over the test engine (`get_test_engine()`) dedicated to
+// sequential, fully synchronized data-preparation tasks such as device memory
+// filling. Stream creation is costly on GPU runtimes, so reusing a single
+// stream across the many per-memory fill operations avoids that overhead.
+//
+// Reuse is safe only because these tasks are submitted serially from the main
+// thread and each waits on the stream before returning. The stream is created
+// without the profiling flag so it never interferes with performance
+// measurement, which uses its own dedicated streams.
+const stream_t &get_test_stream();
 
 #endif
