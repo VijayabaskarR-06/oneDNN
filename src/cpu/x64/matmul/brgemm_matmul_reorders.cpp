@@ -245,13 +245,21 @@ status_t init_conf(matmul::brgemm_matmul_conf_t &conf,
         const bool is_bf16_with_int_wei = type_o == data_type::bf16
                 && utils::one_of(type_i, data_type::s8, data_type::u8,
                         data_type::s4, data_type::u4);
+        const bool is_f32_with_f4_wei
+                = type_o == data_type::f32 && type_i == data_type::f4_e2m1;
 
         otag = get_blocked_otag(dst_md);
         // TODO: enable for itag = {ba, acb}
-        itag = id.matches_one_of_tag(
-                ab, abc, is_bf16_with_int_wei ? otag : format_tag::undef);
+        itag = id.matches_one_of_tag(ab, abc,
+                is_bf16_with_int_wei || is_f32_with_f4_wei ? otag
+                                                           : format_tag::undef);
         VDISPATCH_REORDER_IC(!utils::one_of(format_tag::undef, itag, otag),
                 VERBOSE_UNSUPPORTED_TAG);
+        VDISPATCH_REORDER_IC(
+                IMPLICATION(is_f32_with_f4_wei && itag != otag, N % 2 == 0),
+                VERBOSE_BAD_DIM, "N", ndims - 1);
+        if (is_f32_with_f4_wei && itag == otag)
+            in_ld = matmul::get_n_block_from_tag(otag);
     }
 
     CHECK(matmul::init_conf(conf, batch, M, K, N, in_ld,
@@ -287,6 +295,8 @@ status_t brgemm_matmul_copy_reorder_t::pd_t::init(const engine_t *engine,
     // TODO: enable support for type_i != type_o cases
     const bool is_int_weights = utils::one_of(
             type_i, data_type::s8, data_type::u8, data_type::s4, data_type::u4);
+    const bool is_f32_with_f4_wei
+            = type_o == data_type::f32 && type_i == data_type::f4_e2m1;
     const bool is_plain = id.is_plain() && od.is_plain();
     const bool dt_ok
             = IMPLICATION(type_i == type_o,
@@ -295,14 +305,15 @@ status_t brgemm_matmul_copy_reorder_t::pd_t::init(const engine_t *engine,
             && IMPLICATION(type_i != type_o,
                     utils::one_of(type_o, data_type::f32, data_type::f16,
                             data_type::bf16)
-                            && is_int_weights)
+                            && (is_int_weights || is_f32_with_f4_wei))
             // Plain transpose is supported only for f32. Consider
             // adding other datatypes for potential performance improvement.
             && IMPLICATION(is_plain,
                     type_i == data_type::f32 && type_o == data_type::f32);
     VDISPATCH_REORDER(dt_ok, VERBOSE_UNSUPPORTED_DT);
 
-    VDISPATCH_REORDER(id.is_dense(), VERBOSE_UNSUPPORTED_TENSOR_LAYOUT, "src");
+    VDISPATCH_REORDER(id.is_dense(is_f32_with_f4_wei),
+            VERBOSE_UNSUPPORTED_TENSOR_LAYOUT, "src");
 
     // plain transpose reorder works for all shapes.
     VDISPATCH_REORDER(is_plain ? ndims >= 2 : utils::one_of(ndims, 2, 3),
@@ -370,7 +381,8 @@ status_t brgemm_matmul_copy_reorder_t::execute_body(
     const auto type_o = dst_d.data_type();
     const auto ddt_sz = types::data_type_size(type_o);
     const auto src_typesz_scale
-            = utils::one_of(src_d.data_type(), data_type::s4, data_type::u4)
+            = utils::one_of(src_d.data_type(), data_type::s4, data_type::u4,
+                      data_type::f4_e2m1)
             ? 2
             : 1;
 

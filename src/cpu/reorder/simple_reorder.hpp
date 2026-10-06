@@ -2444,8 +2444,9 @@ struct simple_reorder_impl_t<SIMPLE_REORDER_TEMPL_CALL,
 
         VDISPATCH_REORDER_IC(input_d.is_plain() || input_d.is_dense(true),
                 VERBOSE_UNSUPPORTED_TENSOR_LAYOUT, "src");
-        VDISPATCH_REORDER_IC(
-                output_d.is_dense(), VERBOSE_UNSUPPORTED_TENSOR_LAYOUT, "dst");
+        VDISPATCH_REORDER_IC(output_d.is_dense(type_i == data_type::f4_e2m1
+                                     && type_o == data_type::f32),
+                VERBOSE_UNSUPPORTED_TENSOR_LAYOUT, "dst");
 
         using smask_t = primitive_attr_t::skip_mask_t;
         smask_t skip_mask = smask_t::scales_data_type | smask_t::scales_groups
@@ -2465,6 +2466,9 @@ struct simple_reorder_impl_t<SIMPLE_REORDER_TEMPL_CALL,
     static status_t execute(const cpu_reorder_pd_t *pd, const exec_ctx_t &ctx) {
         DECLARE_COMMON_PARAMS();
         using namespace utils;
+
+        if (type_i == data_type::f4_e2m1 && type_o == data_type::f32)
+            ctx.zero_pad_output(DNNL_ARG_TO);
 
         // TODO: optimization: use int8/f8 types for workspace to save memory.
         data_t<type_o> *wspace = scratchpad.template get<data_t<type_o>>(

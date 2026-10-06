@@ -15,6 +15,7 @@
 * limitations under the License.
 *******************************************************************************/
 
+#include <cmath>
 #include <numeric>
 #include <utility>
 
@@ -100,17 +101,65 @@ TEST_P(fp4_reorder_test_t, PreservesBitsAndZeroPadding) {
 CPU_INSTANTIATE_TEST_SUITE_P(FP4, fp4_reorder_test_t,
         ::testing::Values(fp4_reorder_params_t {{2, 16}, fmt::ab, fmt::ab},
                 fp4_reorder_params_t {{4, 16}, fmt::ab, fmt::ba},
-                fp4_reorder_params_t {{34, 50}, fmt::ab, fmt::BA16a64b2a},
-                fp4_reorder_params_t {{34, 50}, fmt::BA16a64b2a, fmt::ba},
+                fp4_reorder_params_t {{34, 50}, fmt::ab, fmt::BA16a64b},
+                fp4_reorder_params_t {{34, 50}, fmt::BA16a64b, fmt::ba},
+                fp4_reorder_params_t {{33, 49}, fmt::BA16a16b, fmt::BA16a16b},
+                fp4_reorder_params_t {{33, 49}, fmt::BA16a16b, fmt::BA16a64b},
+                fp4_reorder_params_t {{1, 17}, fmt::ab, fmt::BA16a16b},
+                fp4_reorder_params_t {{1, 17}, fmt::BA16a16b, fmt::ab},
+                fp4_reorder_params_t {{3, 34, 50}, fmt::abc, fmt::aCB16b32c},
                 fp4_reorder_params_t {
-                        {33, 49}, fmt::BA16a16b2a, fmt::BA16a16b2a},
-                fp4_reorder_params_t {
-                        {33, 49}, fmt::BA16a16b2a, fmt::BA16a64b2a},
-                fp4_reorder_params_t {{1, 17}, fmt::ab, fmt::BA16a16b2a},
-                fp4_reorder_params_t {{1, 17}, fmt::BA16a16b2a, fmt::ab},
-                fp4_reorder_params_t {{3, 34, 50}, fmt::abc, fmt::aCB16b32c2b},
-                fp4_reorder_params_t {
-                        {3, 33, 49}, fmt::aCB16b16c2b, fmt::aCB16b64c2b}));
+                        {3, 33, 49}, fmt::aCB16b16c, fmt::aCB16b64c}));
+
+TEST(fp4_reorder, DecodePreservesBlockedLayout) {
+    const auto eng = get_test_engine();
+    SKIP_IF(eng.get_kind() != engine::kind::cpu, "CPU-only test.");
+    const auto dt = memory::data_type::f4_e2m1;
+    SKIP_IF(unsupported_data_type(dt), "Engine does not support FP4.");
+    const float values[16] = {0.f, .5f, 1.f, 1.5f, 2.f, 3.f, 4.f, 6.f, -0.f,
+            -.5f, -1.f, -1.5f, -2.f, -3.f, -4.f, -6.f};
+    for (const auto tag : {fmt::BA16a16b, fmt::BA16a32b, fmt::BA16a48b,
+                 fmt::BA16a64b, fmt::aCB16b16c, fmt::aCB16b32c, fmt::aCB16b48c,
+                 fmt::aCB16b64c}) {
+        const bool batched = tag == fmt::aCB16b16c || tag == fmt::aCB16b32c
+                || tag == fmt::aCB16b48c || tag == fmt::aCB16b64c;
+        const auto dims
+                = batched ? memory::dims {3, 33, 49} : memory::dims {33, 49};
+        const memory::desc src_md(dims, dt, tag);
+        const memory::desc dst_md(dims, memory::data_type::f32, tag);
+        const impl::memory_desc_wrapper mdw(src_md.get());
+        auto src = test::make_memory(src_md, eng);
+        auto dst = test::make_memory(dst_md, eng);
+        std::vector<float> expected(dst_md.get_size() / sizeof(float), 0.f);
+        {
+            auto data = map_memory<uint8_t>(src);
+            for (size_t i = 0; i < src_md.get_size(); ++i)
+                data[i] = 0xff;
+            for (memory::dim i = 0; i < mdw.nelems(); ++i) {
+                const auto off = mdw.off_l(i);
+                const auto bits = (i + i / 16 + 1) % 16;
+                const int shift = 4 * (off % 2);
+                data[off / 2]
+                        = (data[off / 2] & ~(0xf << shift)) | (bits << shift);
+                expected[off] = values[bits];
+            }
+        }
+        {
+            auto data = map_memory<float>(dst);
+            for (size_t i = 0; i < expected.size(); ++i)
+                data[i] = 42.f;
+        }
+        auto strm = make_stream(eng);
+        reorder(src, dst).execute(strm, src, dst);
+        strm.wait();
+        const auto data = map_memory<float>(dst);
+        for (size_t i = 0; i < expected.size(); ++i) {
+            ASSERT_EQ(expected[i], data[i]) << "offset " << i;
+            ASSERT_EQ(std::signbit(expected[i]), std::signbit(data[i]))
+                    << "offset " << i;
+        }
+    }
+}
 
 TEST_P(reorder_simple_test_t_f32_bf16, TestsReorder) {
     Test();
