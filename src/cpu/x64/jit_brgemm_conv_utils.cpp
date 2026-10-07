@@ -1371,8 +1371,7 @@ float brg_blocking_t::est_eff_1x1() {
             || (ic == 1024 && oc == 512) || (ic == 256 && oc == 1024)
             || (ic == 512 && oc == 1024) || (ic == 512 && oc == 2048);
     const auto amx_fac = maskrcnn_cond
-            ? (static_cast<float>(div_up(M + M_tail, 16))
-                      / static_cast<float>(n_sp_blks))
+            ? static_cast<float>(div_up(M + M_tail, 16) / n_sp_blks)
             : (static_cast<float>(div_up(M + M_tail, 16))
                       / static_cast<float>(n_sp_blks));
 
