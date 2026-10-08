@@ -343,6 +343,14 @@ status_t gen_desc_t::finalize(const char *tags) {
             return status::unimplemented;
     }
 
+    // Align k blocking and quantization group size
+    if (problem_.quantized2DA())
+        strategy_.blocking[LoopK] = utils::rnd_up(
+                strategy_.blocking[LoopK], std::max(problem_.aqGroupK, 1));
+    if (problem_.quantized2DB())
+        strategy_.blocking[LoopK] = utils::rnd_up(
+                strategy_.blocking[LoopK], std::max(problem_.bqGroupK, 1));
+
     // If the M/N group size is equal to M or N, align up to a multiple of unroll size
     // XXX: Increase group size to a large value before aligning to increase reusability
     // TODO: Refactor M/N groups/thread setting to preserve MN group count.
